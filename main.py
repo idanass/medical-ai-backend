@@ -4,16 +4,24 @@ import base64
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from gradcam_module.inference import GradCAMInference
 from report.pdf_generator import build_pdf
 from storage.minio_client import upload_xray, upload_report, ensure_buckets
 from mlflow_module.tracker import setup_mlflow, log_prediction
-from prometheus_fastapi_instrumentator import Instrumentator
+from security.auth import get_current_user, authenticate_user, create_access_token
+from security.rate_limiter import limiter
 
 # ── Startup ─────────────────────────────────────────
 pipeline = None
@@ -48,6 +56,15 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, lambda req, exc: JSONResponse(
+    status_code=429,
+    content={"detail": "Rate limit exceeded — max 10 requests/minute"}
+))
+app.add_middleware(SlowAPIMiddleware)
+
 Instrumentator().instrument(app).expose(app)
 
 app.add_middleware(
@@ -77,9 +94,26 @@ def health():
         "timestamp": datetime.now().isoformat()
     }
 
+@app.post("/login")
+def login(username: str, password: str):
+    """Get JWT token"""
+    user = authenticate_user(username, password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = create_access_token({"sub": user["username"], "role": user["role"]})
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "role": user["role"]
+    }
 
 @app.post("/predict")
-async def predict(file: UploadFile = File(...)):
+@limiter.limit("10/minute")
+async def predict(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
@@ -123,7 +157,10 @@ async def predict(file: UploadFile = File(...)):
 
 
 @app.post("/report")
-async def generate_report(request: Request):
+async def generate_report(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
     try:
         body = await request.json()
     except Exception:
