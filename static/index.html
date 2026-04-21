@@ -13,7 +13,7 @@
       color: #1a202c;
       min-height: 100vh;
     }
-
+    
     .app { max-width: 960px; margin: 0 auto; padding: 2rem 1rem; }
 
     /* ── Header ── */
@@ -185,6 +185,33 @@
   </style>
 </head>
 <body>
+  <!-- Login Screen -->
+  <div id="login-screen" style="
+    position:fixed; inset:0; background:#0A1628;
+    display:flex; align-items:center; justify-content:center; z-index:999;">
+    <div style="background:white; border-radius:16px; padding:2.5rem; width:360px; text-align:center;">
+      <img src="/static/logo.png" style="height:70px; margin-bottom:1rem;"/>
+      <h2 style="color:#0A1628; font-size:20px; margin-bottom:0.5rem;">CXR-Diagnostica</h2>
+      <p style="color:#718096; font-size:13px; margin-bottom:1.5rem;">Accès réservé au personnel médical</p>
+      <input id="login-user" type="text" placeholder="Nom d'utilisateur"
+        style="width:100%; padding:10px; margin-bottom:10px; border:1px solid #e2e8f0;
+              border-radius:8px; font-size:14px; box-sizing:border-box;"/>
+      <input id="login-pass" type="password" placeholder="Mot de passe"
+        style="width:100%; padding:10px; margin-bottom:10px; border:1px solid #e2e8f0;
+              border-radius:8px; font-size:14px; box-sizing:border-box;"/>
+      <p id="login-error" style="color:#c53030; font-size:12px; margin-bottom:8px; display:none;">
+        Identifiants incorrects
+      </p>
+      <button onclick="doLogin()"
+        style="width:100%; padding:12px; background:#1565C0; color:white;
+              border:none; border-radius:8px; font-size:15px; font-weight:600; cursor:pointer;">
+        Se connecter
+      </button>
+      <p style="color:#a0aec0; font-size:11px; margin-top:1rem;">
+        ⚠️ Accès strictement réservé au personnel autorisé
+      </p>
+    </div>
+  </div>
 <div class="app">
 
   <!-- Header -->
@@ -288,6 +315,34 @@
 </div>
 
 <script>
+  async function doLogin() {
+  const username = document.getElementById('login-user').value;
+  const password = document.getElementById('login-pass').value;
+
+  if (!username || !password) return;
+
+  try {
+    const res = await fetch(`/login?username=${username}&password=${password}`, {
+      method: 'POST'
+    });
+    const data = await res.json();
+
+    if (res.ok && data.access_token) {
+      window._token = data.access_token;
+      document.getElementById('login-screen').style.display = 'none';
+    } else {
+      document.getElementById('login-error').style.display = 'block';
+    }
+  } catch(err) {
+    document.getElementById('login-error').style.display = 'block';
+  }
+}
+
+// Allow Enter key on login
+document.getElementById('login-pass').addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') doLogin();
+});
+
 const zone    = document.getElementById('upload-zone');
 const fileIn  = document.getElementById('file-input');
 const prevImg = document.getElementById('preview-img');
@@ -323,13 +378,7 @@ function handleFile(file) {
 // ── Analyze ──
 btnAn.addEventListener('click', async () => {
   if (!selectedFile) return;
-
-  // Get token first
-  const tokenRes = await fetch('/login?username=doctor&password=doctor123', {
-    method: 'POST'
-  });
-  const tokenData = await tokenRes.json();
-  const token = tokenData.access_token;
+  const token = window._token;
 
   document.getElementById('loader').style.display = 'block';
   document.getElementById('results-section').style.display = 'none';
@@ -432,11 +481,7 @@ async function exportPDF() {
   btn.textContent = '⏳ Generating...';
 
   // Get token
-  const tokenRes = await fetch('/login?username=doctor&password=doctor123', {
-    method: 'POST'
-  });
-  const tokenData = await tokenRes.json();
-  const token = tokenData.access_token;
+  const token = window._token;
 
   const payload = {
     name:        document.getElementById('p-name').value    || 'N/A',
